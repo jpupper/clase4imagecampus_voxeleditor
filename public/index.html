@@ -27,6 +27,9 @@
     }
   }
   </script>
+
+  <!-- Socket.IO Cliente -->
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 
 <body>
@@ -48,10 +51,17 @@
       </div>
     </div>
 
-    <!-- Estadísticas y Contador -->
-    <div class="stats-badge" title="Total de cubos colocados en la escena">
-      <span class="stats-icon">🧱</span>
-      <span class="stats-text">Cubos: <strong id="cube-count">0</strong></span>
+    <!-- Indicador de Usuarios en Línea y Contador de Cubos -->
+    <div class="header-badges">
+      <div class="online-badge" title="Usuarios conectados construyendo en simultáneo">
+        <span class="online-pulse"></span>
+        <span class="online-text"><strong id="online-users-count">1</strong> en línea</span>
+      </div>
+
+      <div class="stats-badge" title="Total de cubos colocados en la escena">
+        <span class="stats-icon">🧱</span>
+        <span class="stats-text">Cubos: <strong id="cube-count">0</strong></span>
+      </div>
     </div>
 
     <!-- Botones de Acción Globales -->

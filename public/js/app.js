@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// Conexión en tiempo real con Socket.IO
+const socket = typeof io !== 'undefined' ? io() : null;
+
 /* ==========================================================================
    ESTADO GLOBAL DE LA APLICACIÓN
    ========================================================================== */
@@ -264,7 +267,7 @@ function createCubeMesh(x, y, z, hexColor) {
 }
 
 // Colocar un nuevo cubo
-function placeCube(x, y, z, hexColor) {
+function placeCube(x, y, z, hexColor, fromRemote = false) {
   const key = getKey(x, y, z);
   if (state.cubeMap.has(key)) return; // Ya existe en esa posición
 
@@ -275,13 +278,19 @@ function placeCube(x, y, z, hexColor) {
 
   updateCubeCounter();
   playSound('place');
+
+  // Sincronizar con los demás clientes si fue colocado por este usuario
+  if (!fromRemote && socket) {
+    socket.emit('place-cube', { x, y, z, color: hexColor });
+  }
 }
 
 // Borrar un cubo existente
-function eraseCube(cubeMesh) {
+function eraseCube(cubeMesh, fromRemote = false) {
   if (!cubeMesh || !cubeMesh.userData.isVoxel) return;
 
   const key = getKey(cubeMesh.position.x, cubeMesh.position.y, cubeMesh.position.z);
+  const pos = { x: cubeMesh.position.x, y: cubeMesh.position.y, z: cubeMesh.position.z };
   state.cubeMap.delete(key);
 
   const idx = state.cubes.indexOf(cubeMesh);
@@ -293,10 +302,24 @@ function eraseCube(cubeMesh) {
 
   updateCubeCounter();
   playSound('erase');
+
+  // Sincronizar con los demás clientes si fue borrado por este usuario
+  if (!fromRemote && socket) {
+    socket.emit('erase-cube', pos);
+  }
+}
+
+// Borrar un cubo por coordenadas (para eventos remotos)
+function eraseCubeAt(x, y, z) {
+  const key = getKey(x, y, z);
+  const cube = state.cubeMap.get(key);
+  if (cube) {
+    eraseCube(cube, true);
+  }
 }
 
 // Limpiar toda la escena
-function clearScene() {
+function clearScene(fromRemote = false) {
   state.cubes.forEach(cube => {
     scene.remove(cube);
     if (cube.geometry) cube.geometry.dispose();
@@ -306,16 +329,24 @@ function clearScene() {
   state.cubeMap.clear();
   hoveredCube = null;
   updateCubeCounter();
-  showToast('Lienzo limpio y listo', 'info');
+
+  if (!fromRemote) {
+    showToast('Lienzo limpio y listo', 'info');
+    if (socket) socket.emit('clear-world');
+  }
 }
 
 // Cargar conjunto de cubos en la escena
-function loadCubes(cubesData) {
-  clearScene();
+function loadCubes(cubesData, fromRemote = false, presetName = '') {
+  clearScene(true);
   cubesData.forEach(c => {
-    placeCube(c.x, c.y, c.z, c.color);
+    placeCube(c.x, c.y, c.z, c.color, true);
   });
   centerCameraOnModel();
+
+  if (!fromRemote && socket) {
+    socket.emit('load-world', { cubes: cubesData, presetName: presetName });
+  }
 }
 
 // Centrar y ajustar la cámara al modelo actual
@@ -766,9 +797,9 @@ function renderPresetsList() {
 
     // Evento Cargar Preset
     card.querySelector('.btn-load-preset').addEventListener('click', () => {
-      loadCubes(preset.cubes);
+      loadCubes(preset.cubes, false, preset.name);
       closeAllModals();
-      showToast(`¡Preset "${preset.name}" cargado en la escena!`, 'success');
+      showToast(`¡Preset "${preset.name}" cargado y sincronizado!`, 'success');
     });
 
     // Evento Eliminar Preset
@@ -838,14 +869,65 @@ function animate() {
 // Iniciar animación
 animate();
 
-// Al arrancar la aplicación, indexar automáticamente todos los presets del servidor
+/* ==========================================================================
+   SINCRONIZACIÓN EN TIEMPO REAL CON SOCKET.IO
+   ========================================================================== */
+if (socket) {
+  // 1. Estado inicial del mundo al conectarse
+  socket.on('init-world', (data) => {
+    if (data && Array.isArray(data.cubes)) {
+      loadCubes(data.cubes, true);
+      if (data.cubes.length > 0) {
+        showToast(`Lienzo sincronizado (${data.cubes.length} bloques activos)`, 'info');
+      }
+    }
+  });
+
+  // 2. Contador de usuarios en línea
+  socket.on('users-count', (data) => {
+    const countEl = document.getElementById('online-users-count');
+    if (countEl && data && typeof data.count === 'number') {
+      countEl.innerText = data.count;
+    }
+  });
+
+  // 3. Otro usuario colocó un cubo
+  socket.on('cube-placed', (data) => {
+    if (data && typeof data.x === 'number') {
+      placeCube(data.x, data.y, data.z, data.color, true);
+    }
+  });
+
+  // 4. Otro usuario borró un cubo
+  socket.on('cube-erased', (data) => {
+    if (data && typeof data.x === 'number') {
+      eraseCubeAt(data.x, data.y, data.z);
+    }
+  });
+
+  // 5. Otro usuario limpió el lienzo
+  socket.on('world-cleared', () => {
+    clearScene(true);
+    showToast('Un constructor limpió el lienzo colaborativo', 'info');
+  });
+
+  // 6. Otro usuario cargó un preset
+  socket.on('world-loaded', (data) => {
+    if (data && Array.isArray(data.cubes)) {
+      loadCubes(data.cubes, true);
+      showToast(`¡Un constructor cargó "${data.presetName || 'Preset'}"!`, 'info');
+    }
+  });
+}
+
+// Al arrancar la aplicación, indexar automáticamente los presets del backend
 window.addEventListener('DOMContentLoaded', async () => {
   await fetchPresets();
-  
-  // Si hay presets guardados, cargamos el primer modelo por defecto para que la escena empiece viva
-  if (state.presets.length > 0) {
+
+  // Si no hay sockets activos, cargamos el primer modelo por defecto como respaldo
+  if (!socket && state.presets.length > 0) {
     const firstPreset = state.presets[0];
-    loadCubes(firstPreset.cubes);
-    showToast(`Modelo inicial "${firstPreset.name}" cargado desde el servidor`, 'info');
+    loadCubes(firstPreset.cubes, true);
+    showToast(`Modelo inicial "${firstPreset.name}" cargado`, 'info');
   }
 });

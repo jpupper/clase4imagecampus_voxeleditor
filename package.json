@@ -17,6 +17,10 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "socket.io": "^4.8.3",
     "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
   }
 }

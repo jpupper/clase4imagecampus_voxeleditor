@@ -1,9 +1,19 @@
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 // Middlewares
@@ -23,7 +33,7 @@ function initDataStorage() {
   }
 
   if (!fs.existsSync(PRESETS_FILE)) {
-    // Modelos predefinidos de ejemplo para empezar con contenido interesante
+    // Modelos predefinidos de ejemplo
     const initialPresets = [
       {
         id: 'preset-arbol-1',
@@ -97,7 +107,85 @@ function writePresets(presets) {
   }
 }
 
-// ================= RUTAS DE LA API =================
+// ================= ESTADO DEL MUNDO COLABORATIVO (SOCKETS) =================
+// Mapa en memoria que guarda el estado activo del lienzo compartido
+// Clave: "x,y,z" -> { x, y, z, color }
+const activeCubes = new Map();
+
+function initActiveWorld() {
+  const presets = readPresets();
+  if (presets.length > 0 && Array.isArray(presets[0].cubes)) {
+    presets[0].cubes.forEach(c => {
+      const key = `${Number(c.x).toFixed(1)},${Number(c.y).toFixed(1)},${Number(c.z).toFixed(1)}`;
+      activeCubes.set(key, { x: c.x, y: c.y, z: c.z, color: c.color });
+    });
+  }
+}
+
+initActiveWorld();
+
+io.on('connection', (socket) => {
+  const onlineCount = io.engine.clientsCount;
+  console.log(`[Socket.IO] Cliente conectado: ${socket.id} (Constructores online: ${onlineCount})`);
+
+  // 1. Enviar estado actual del lienzo compartido al nuevo usuario conectado
+  socket.emit('init-world', {
+    cubes: Array.from(activeCubes.values())
+  });
+
+  // 2. Notificar a todos el total de usuarios en línea
+  io.emit('users-count', { count: onlineCount });
+
+  // 3. Evento: Colocar cubo
+  socket.on('place-cube', (data) => {
+    if (data && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number' && data.color) {
+      const key = `${Number(data.x).toFixed(1)},${Number(data.y).toFixed(1)},${Number(data.z).toFixed(1)}`;
+      activeCubes.set(key, { x: data.x, y: data.y, z: data.z, color: data.color });
+      // Retransmitir a todos los demás clientes
+      socket.broadcast.emit('cube-placed', data);
+    }
+  });
+
+  // 4. Evento: Borrar cubo
+  socket.on('erase-cube', (data) => {
+    if (data && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
+      const key = `${Number(data.x).toFixed(1)},${Number(data.y).toFixed(1)},${Number(data.z).toFixed(1)}`;
+      activeCubes.delete(key);
+      // Retransmitir a todos los demás clientes
+      socket.broadcast.emit('cube-erased', data);
+    }
+  });
+
+  // 5. Evento: Limpiar lienzo completo
+  socket.on('clear-world', () => {
+    activeCubes.clear();
+    socket.broadcast.emit('world-cleared');
+  });
+
+  // 6. Evento: Cargar un preset compartido en el lienzo
+  socket.on('load-world', (data) => {
+    if (data && Array.isArray(data.cubes)) {
+      activeCubes.clear();
+      data.cubes.forEach(c => {
+        const key = `${Number(c.x).toFixed(1)},${Number(c.y).toFixed(1)},${Number(c.z).toFixed(1)}`;
+        activeCubes.set(key, { x: c.x, y: c.y, z: c.z, color: c.color });
+      });
+      socket.broadcast.emit('world-loaded', {
+        cubes: data.cubes,
+        presetName: data.presetName || 'Preset compartido'
+      });
+    }
+  });
+
+  // 7. Desconexión
+  socket.on('disconnect', () => {
+    const remaining = io.engine.clientsCount;
+    console.log(`[Socket.IO] Cliente desconectado: ${socket.id} (Restantes: ${remaining})`);
+    io.emit('users-count', { count: remaining });
+  });
+});
+
+// ================= RUTAS DE LA API REST =================
 
 // 1. Obtener todos los presets guardados
 app.get('/api/presets', (req, res) => {
@@ -132,7 +220,7 @@ app.post('/api/presets', (req, res) => {
     thumbnail: thumbnail || null
   };
 
-  presets.unshift(newPreset); // Agregar al inicio de la lista
+  presets.unshift(newPreset);
   const saved = writePresets(presets);
 
   if (saved) {
@@ -176,13 +264,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
+// Iniciar servidor HTTP con WebSockets
+server.listen(PORT, () => {
   console.log('\n=============================================================');
-  console.log('       MINECRAFT 3D VOXEL STUDIO - SERVIDOR INICIADO         ');
+  console.log('   MINECRAFT 3D VOXEL STUDIO - SERVIDOR COLABORATIVO ACTIVO  ');
   console.log('=============================================================');
   console.log(` > Puerto de la aplicación: ${PORT}`);
   console.log(` > URL Local:               http://localhost:${PORT}`);
-  console.log(' > Estado:                  Listo para crear y guardar mundos');
+  console.log(' > Modo Sockets:            Sincronización en tiempo real activa');
   console.log('=============================================================\n');
 });
