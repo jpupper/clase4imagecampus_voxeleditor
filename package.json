@@ -1,0 +1,22 @@
+{
+  "name": "minecraft-3d-voxel-editor",
+  "version": "1.0.0",
+  "description": "Editor en 3D tipo Minecraft con Three.js y Node.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "threejs",
+    "voxel",
+    "minecraft",
+    "3d-editor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "three": "^0.186.0"
+  }
+}
